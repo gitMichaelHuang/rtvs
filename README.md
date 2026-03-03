@@ -1,2 +1,2 @@
-#NGT Project Submission - RTVS (Real-time Payment Validation System) Simluation
+# NGT Project Submission - RTVS (Real-time Payment Validation System) Simluation
 Michael Huang
