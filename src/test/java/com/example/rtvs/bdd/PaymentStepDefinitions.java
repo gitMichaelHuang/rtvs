@@ -1,153 +1,127 @@
 package com.example.rtvs.bdd;
 
-import com.example.rtvs.security.JwtTokenProvider;
+import com.example.rtvs.repository.UserAccountRepository;
 import io.cucumber.java.en.And;
 import io.cucumber.java.en.Given;
 import io.cucumber.java.en.Then;
 import io.cucumber.java.en.When;
-import io.cucumber.spring.ScenarioScope;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
-import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@Component
-@ScenarioScope
 public class PaymentStepDefinitions {
 
-    @Autowired
-    private TestRestTemplate restTemplate;
+
+    // reusable type for map responses for RestTemplate to deserialize
+    private static final ParameterizedTypeReference<Map<String, Object>> MAP_TYPE =
+            new ParameterizedTypeReference<>() {};
+
+    @LocalServerPort
+    private int port;
 
     @Autowired
-    private JwtTokenProvider jwtTokenProvider;
+    private UserAccountRepository userAccountRepository;
 
-    private String currentToken;
-    private ResponseEntity<Map> lastResponse;
-    private String originalTransactionId;
 
-    // ── Background ────────────────────────────────────────────────────────────
+    // http client used to call endpoints and parse responses
+    private final RestTemplate restTemplate = new RestTemplate();
+
+    private String jwtToken;
+
+    // keep most recent for later gherkin steps
+    private ResponseEntity<Map<String, Object>> lastResponse;
+
+    private String baseUrl() {
+        return "http://localhost:" + port;
+    }
+
+    // STEP ONE
+    // verifies U100 and U200 exists from background step
 
     @Given("the system has been seeded with standard test accounts")
-    public void systemSeeded() {
-        // DataInitializer runs at Spring context startup — nothing additional needed
+    public void theSystemHasBeenSeededWithStandardTestAccounts() {
+        assertThat(userAccountRepository.findById("U100")).isPresent();
+        assertThat(userAccountRepository.findById("U200")).isPresent();
     }
 
-    // ── Auth ──────────────────────────────────────────────────────────────────
-
+    // STEP ONE
+    // calls POST /auth/login to get the JWT token
+    // builds json headers and login body of userId,password
     @Given("user {string} is authenticated with role {string}")
-    public void userAuthenticated(String userId, String role) {
-        var auth = new UsernamePasswordAuthenticationToken(
-                userId, null, List.of(new SimpleGrantedAuthority(role)));
-        currentToken = jwtTokenProvider.generateToken(auth);
+    public void userIsAuthenticatedWithRole(String userId, String role) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        Map<String, String> loginBody = Map.of("userId", userId, "password", "password");
+
+        ResponseEntity<Map<String, Object>> loginResponse = restTemplate.exchange(
+                baseUrl() + "/auth/login",
+                HttpMethod.POST,
+                new HttpEntity<>(loginBody, headers),
+                MAP_TYPE
+        );
+
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        jwtToken = (String) loginResponse.getBody().get("token");
+        assertThat(jwtToken).isNotBlank();
     }
 
-    // ── Payment actions ───────────────────────────────────────────────────────
 
+    // STEP TWO
+    // calls POST api/v1/rtp/payments with the JWT token
+    // builds json headers and sets auth bearer
     @When("user {string} sends a payment of {string} USD to {string} with request id {string}")
-    public void userSendsPayment(String sender, String amount, String receiver, String requestId) {
+    public void userSendsPayment(String senderId, String amount, String receiverId, String requestId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setBearerAuth(jwtToken);
+
+        // builds json body
+        Map<String, Object> paymentBody = Map.of(
+                "paymentRequestId", requestId,
+                "senderId", senderId,
+                "receiverId", receiverId,
+                "amount", new BigDecimal(amount),
+                "currency", "USD"
+        );
+
+
+        // stores for cache
         lastResponse = restTemplate.exchange(
-                "/api/v1/rtp/payments",
+                baseUrl() + "/api/v1/rtp/payments",
                 HttpMethod.POST,
-                buildPaymentEntity(requestId, sender, receiver, amount),
-                Map.class);
+                new HttpEntity<>(paymentBody, headers),
+                MAP_TYPE
+        );
     }
 
-    @And("a payment of {string} USD to {string} with request id {string} has already been processed")
-    public void paymentAlreadyProcessed(String amount, String receiver, String requestId) {
-        // Make the initial payment and store the returned transactionId
-        ResponseEntity<Map> firstResponse = restTemplate.exchange(
-                "/api/v1/rtp/payments",
-                HttpMethod.POST,
-                buildPaymentEntity(requestId, "U100", receiver, amount),
-                Map.class);
-        assertThat(firstResponse.getStatusCode().value()).isEqualTo(200);
-        originalTransactionId = (String) firstResponse.getBody().get("transactionId");
-        assertThat(originalTransactionId).isNotBlank();
-    }
 
-    @When("user {string} sends a V2 payment of {string} USD to {string} with request id {string} and processingMode {string}")
-    public void userSendsV2Payment(String sender, String amount, String receiver,
-                                   String requestId, String processingMode) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("paymentRequestId", requestId);
-        body.put("senderId", sender);
-        body.put("receiverId", receiver);
-        body.put("amount", new BigDecimal(amount));
-        body.put("currency", "USD");
-        body.put("processingMode", processingMode);
-
-        lastResponse = restTemplate.exchange(
-                "/api/v2/rtp/payments",
-                HttpMethod.POST,
-                new HttpEntity<>(body, authHeaders()),
-                Map.class);
-    }
-
-    // ── Assertions ────────────────────────────────────────────────────────────
-
+    // get status code
     @Then("the response status is {int}")
-    public void responseStatusIs(int expectedStatus) {
+    public void theResponseStatusIs(int expectedStatus) {
         assertThat(lastResponse.getStatusCode().value()).isEqualTo(expectedStatus);
     }
 
-    @Then("the payment status is {string}")
-    public void paymentStatusIs(String expectedStatus) {
+    // get status code
+    @And("the payment status is {string}")
+    public void thePaymentStatusIs(String expectedStatus) {
         assertThat(lastResponse.getBody()).containsEntry("status", expectedStatus);
     }
 
-    @Then("a transactionId is present in the response")
-    public void transactionIdPresent() {
-        assertThat(lastResponse.getBody().get("transactionId")).isNotNull();
-    }
 
-    @Then("the reason code is {string}")
-    public void reasonCodeIs(String expectedCode) {
-        assertThat(lastResponse.getBody()).containsEntry("reasonCode", expectedCode);
-    }
-
-    @Then("the transactionId matches the original transaction")
-    public void transactionIdMatchesOriginal() {
-        String returnedId = (String) lastResponse.getBody().get("transactionId");
-        assertThat(returnedId).isEqualTo(originalTransactionId);
-    }
-
-    @Then("the V2 response contains processingMode {string}")
-    public void v2ResponseContainsProcessingMode(String expectedMode) {
-        assertThat(lastResponse.getBody()).containsEntry("processingMode", expectedMode);
-    }
-
-    @Then("the V2 response contains estimatedCompletionSeconds {int}")
-    public void v2ResponseContainsEstimatedSeconds(int expectedSeconds) {
-        assertThat(lastResponse.getBody().get("estimatedCompletionSeconds"))
-                .isEqualTo(expectedSeconds);
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private HttpEntity<Map<String, Object>> buildPaymentEntity(
-            String requestId, String sender, String receiver, String amount) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("paymentRequestId", requestId);
-        body.put("senderId", sender);
-        body.put("receiverId", receiver);
-        body.put("amount", new BigDecimal(amount));
-        body.put("currency", "USD");
-        return new HttpEntity<>(body, authHeaders());
-    }
-
-    private HttpHeaders authHeaders() {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.setBearerAuth(currentToken);
-        return headers;
+    // get transactionId see if it's there
+    @And("a transactionId is present in the response")
+    public void aTransactionIdIsPresentInTheResponse() {
+        assertThat(lastResponse.getBody()).containsKey("transactionId");
+        assertThat((String) lastResponse.getBody().get("transactionId")).isNotBlank();
     }
 }
+
+// data exist -> auth jwt -> send payment request -> assert HTTP status

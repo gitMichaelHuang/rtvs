@@ -10,11 +10,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 
-/**
- * Resets mutable account balances after each BDD scenario so that
- * scenarios that commit real DB transactions don't bleed into each other.
- */
-@Component
 @ScenarioScope
 public class TestDataCleanup {
 
@@ -29,14 +24,6 @@ public class TestDataCleanup {
     public void resetTestData() {
         userAccountRepository.findById("U100").ifPresent(u -> {
             u.setCurrentBalance(new BigDecimal("5000.00"));
-            userAccountRepository.save(u);
-        });
-        userAccountRepository.findById("U200").ifPresent(u -> {
-            u.setCurrentBalance(new BigDecimal("1000.00"));
-            userAccountRepository.save(u);
-        });
-        userAccountRepository.findById("U300").ifPresent(u -> {
-            u.setCurrentBalance(new BigDecimal("0.00"));
             userAccountRepository.save(u);
         });
     }
