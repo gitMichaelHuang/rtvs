@@ -1,0 +1,11 @@
+package com.example.rtvs.bdd;
+
+import io.cucumber.spring.CucumberContextConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
+
+@CucumberContextConfiguration
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+public class CucumberSpringConfig {
+    // Bridges Cucumber to the Spring Boot application context.
+    // DataInitializer seeds test accounts once at context startup.
+}
